@@ -1,0 +1,31 @@
+type Mutation {
+  uploadDocument(fileName: String!, contentType: String!): UploadResponse
+}
+
+type Query {
+  getDocumentStatus(documentId: ID!): Document
+}
+
+type Subscription {
+  onDocumentProcessed(documentId: ID!): Document
+    @aws_subscribe(mutations: ["uploadDocument"])
+}
+
+type UploadResponse {
+  presignedUrl: String!
+  documentId: ID!
+}
+
+type Document {
+  documentId: ID!
+  status: String!
+  s3Key: String
+  uploadTime: AWSDateTime
+  processedTime: AWSDateTime
+  textractData: AWSJSON
+  comprehendEntities: AWSJSON
+  errorMessage: String
+}
+
+scalar AWSDateTime
+scalar AWSJSON
