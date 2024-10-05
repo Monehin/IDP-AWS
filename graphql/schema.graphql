@@ -7,7 +7,7 @@ type Query {
 }
 
 type Subscription {
-  onDocumentProcessed(documentId: ID!): Document
+  onUploadDocument(documentId: ID!): UploadResponse
     @aws_subscribe(mutations: ["uploadDocument"])
 }
 
