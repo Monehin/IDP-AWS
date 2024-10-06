@@ -1,6 +1,7 @@
 import * as cdk from "aws-cdk-lib";
 import {
   aws_s3 as s3,
+  aws_s3_notifications as s3n,
   aws_lambda as lambda,
   aws_lambda_nodejs as lambdaNodejs,
   aws_dynamodb as dynamodb,
@@ -103,7 +104,7 @@ export class DocumentProcessingAppStack extends cdk.Stack {
 
     // Permissions for Processing Handler
     bucket.grantRead(processingLambdaRole); // Allows reading from S3 bucket
-    table.grantWriteData(processingLambdaRole); // Allows writing to DynamoDB table
+    table.grantReadWriteData(processingLambdaRole); // Allows reading and writing to DynamoDB table
 
     processingLambdaRole.addToPolicy(
       new iam.PolicyStatement({
@@ -119,7 +120,7 @@ export class DocumentProcessingAppStack extends cdk.Stack {
 
     processingLambdaRole.addToPolicy(
       new iam.PolicyStatement({
-        actions: ["dynamodb:UpdateItem"],
+        actions: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
         resources: [table.tableArn],
       })
     );
@@ -138,6 +139,12 @@ export class DocumentProcessingAppStack extends cdk.Stack {
         "service-role/AWSLambdaBasicExecutionRole"
       )
     );
+
+    // IAM Role for S3 event Handler Lambda Function
+
+    const s3EventLambdaRole = new iam.Role(this, "S3EventLambdaExecutionRole", {
+      assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+    });
 
     // Permissions for Queue Processing Handler
     queue.grantConsumeMessages(queueProcessingLambdaRole); // Allows consuming messages from SQS queue
@@ -193,6 +200,49 @@ export class DocumentProcessingAppStack extends cdk.Stack {
         timeout: cdk.Duration.minutes(5), // Adjusted timeout
       }
     );
+
+    // Lambda Function: S3 Event Handler
+    const s3EventHandler = new lambdaNodejs.NodejsFunction(
+      this,
+      "S3EventHandler",
+      {
+        runtime: lambda.Runtime.NODEJS_20_X,
+        entry: "lambda/s3-event-handler/index.ts",
+        handler: "handler",
+        environment: {
+          S3_BUCKET: bucket.bucketName,
+          DYNAMODB_TABLE: table.tableName,
+          SQS_QUEUE_URL: queue.queueUrl,
+        },
+        role: s3EventLambdaRole,
+        tracing: lambda.Tracing.ACTIVE,
+      }
+    );
+
+    bucket.addEventNotification(
+      s3.EventType.OBJECT_CREATED,
+      new s3n.LambdaDestination(s3EventHandler),
+      { prefix: "uploads/direct/" }
+    );
+
+    s3EventHandler.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["dynamodb:GetItem", "dynamodb:PutItem"],
+        resources: [table.tableArn],
+      })
+    );
+
+    s3EventHandler.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["sqs:SendMessage"],
+        resources: [queue.queueArn],
+      })
+    );
+
+    // Grant necessary permissions
+    bucket.grantReadWrite(s3EventHandler);
+    table.grantReadWriteData(s3EventHandler);
+    queue.grantSendMessages(s3EventHandler);
 
     // Step Functions Task: Process Document
     const processDocumentTask = new tasks.LambdaInvoke(
