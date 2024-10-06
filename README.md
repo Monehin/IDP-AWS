@@ -69,11 +69,20 @@ aws-document-processing-solution/
 ├── amplify/
 ├── bin/
 │   └── document-processing.ts
+├── graphql/
+│   └── schema.graphql
 ├── cdk.json
 ├── lambda/
+│   ├── common/
+│   │   ├── aws-client.ts
+│   │   ├── environment.ts
+│   │   ├── helper-function.ts
+│   │   └── types.ts
 │   ├── processing-handler/
 │   │   └── index.ts
 │   ├── queue-processing-handler/
+│   │   └── index.ts
+│   ├── s3-event-handler/
 │   │   └── index.ts
 │   └── upload-handler/
 │       └── index.ts
