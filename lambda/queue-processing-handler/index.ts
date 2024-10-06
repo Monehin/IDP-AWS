@@ -20,7 +20,6 @@ export const handler = async (event: SQSEvent): Promise<void> => {
         .promise();
     } catch (error) {
       console.error("Error processing SQS message:", error);
-      // Optionally handle the error or send to DLQ
     }
   }
 };

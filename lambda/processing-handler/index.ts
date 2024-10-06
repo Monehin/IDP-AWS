@@ -1,111 +1,16 @@
 import { Context } from "aws-lambda";
-import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+import { GetItemCommand } from "@aws-sdk/client-dynamodb";
+import { Block } from "@aws-sdk/client-textract";
+
+import { dynamoDBClient } from "../common/aws-clients";
+import { DYNAMODB_TABLE, S3_BUCKET } from "../common/environment";
+import { LambdaEvent } from "../common/types";
 import {
-  DynamoDBClient,
-  UpdateItemCommand,
-  AttributeValue,
-} from "@aws-sdk/client-dynamodb";
-import {
-  TextractClient,
-  AnalyzeDocumentCommand,
-  Block,
-  AnalyzeDocumentCommandOutput,
-} from "@aws-sdk/client-textract";
-import {
-  ComprehendClient,
-  DetectEntitiesCommand,
-  DetectEntitiesCommandOutput,
-} from "@aws-sdk/client-comprehend";
-import { Readable } from "stream";
-
-// TypeScript Interfaces
-interface LambdaEvent {
-  documentId: string;
-  s3Key: string;
-}
-
-interface DynamoDBUpdateParams {
-  TableName: string;
-  Key: { [key: string]: AttributeValue };
-  UpdateExpression: string;
-  ExpressionAttributeNames?: { [key: string]: string };
-  ExpressionAttributeValues: { [key: string]: AttributeValue };
-}
-
-// Environment Variables
-const S3_BUCKET = process.env.S3_BUCKET!;
-const DYNAMODB_TABLE = process.env.DYNAMODB_TABLE!;
-const AWS_REGION = process.env.AWS_REGION || "us-west-1";
-const s3Client = new S3Client({ region: AWS_REGION });
-const dynamoDBClient = new DynamoDBClient({ region: AWS_REGION });
-const textractClient = new TextractClient({ region: AWS_REGION });
-const comprehendClient = new ComprehendClient({ region: AWS_REGION });
-
-// Helper Functions
-const updateDynamoDBStatus = async (params: DynamoDBUpdateParams) => {
-  try {
-    const command = new UpdateItemCommand(params);
-    await dynamoDBClient.send(command);
-  } catch (error) {
-    console.error("Failed to update DynamoDB status:", error);
-    throw error;
-  }
-};
-
-const getS3Object = async (bucket: string, key: string): Promise<Buffer> => {
-  try {
-    const command = new GetObjectCommand({ Bucket: bucket, Key: key });
-    const response = await s3Client.send(command);
-
-    if (!response.Body) {
-      throw new Error("S3 object body is empty");
-    }
-
-    const stream = response.Body as Readable;
-    const chunks: Uint8Array[] = [];
-
-    for await (const chunk of stream) {
-      chunks.push(chunk);
-    }
-
-    return Buffer.concat(chunks);
-  } catch (error) {
-    console.error("Failed to get S3 object:", error);
-    throw error;
-  }
-};
-
-const analyzeDocument = async (
-  documentBytes: Buffer
-): Promise<AnalyzeDocumentCommandOutput> => {
-  try {
-    const command = new AnalyzeDocumentCommand({
-      Document: { Bytes: documentBytes },
-      FeatureTypes: ["TABLES", "FORMS"],
-    });
-    const response = await textractClient.send(command);
-    return response;
-  } catch (error) {
-    console.error("Failed to analyze document with Textract:", error);
-    throw error;
-  }
-};
-
-const detectEntities = async (
-  text: string
-): Promise<DetectEntitiesCommandOutput> => {
-  try {
-    const command = new DetectEntitiesCommand({
-      LanguageCode: "en",
-      Text: text,
-    });
-    const response = await comprehendClient.send(command);
-    return response;
-  } catch (error) {
-    console.error("Failed to detect entities with Comprehend:", error);
-    throw error;
-  }
-};
+  updateDynamoDBStatus,
+  getS3Object,
+  analyzeDocument,
+  detectEntities,
+} from "../common/helper-functions";
 
 export const handler = async (
   event: LambdaEvent,
@@ -120,6 +25,25 @@ export const handler = async (
   }
 
   try {
+    // Idempotency Check: Verify if the document has already been processed
+    const existingItem = await dynamoDBClient.send(
+      new GetItemCommand({
+        TableName: DYNAMODB_TABLE,
+        Key: { documentId: { S: documentId } },
+      })
+    );
+
+    if (
+      existingItem.Item &&
+      existingItem.Item.status &&
+      existingItem.Item.status.S === "PROCESSED"
+    ) {
+      console.log(
+        `Document ${documentId} has already been processed. Skipping processing.`
+      );
+      return; // Exit the function to prevent re-processing
+    }
+
     // Update DynamoDB status to PROCESSING
     await updateDynamoDBStatus({
       TableName: DYNAMODB_TABLE,
@@ -163,9 +87,6 @@ export const handler = async (
         },
       },
     });
-
-    // Optionally, send a notification via AppSync or SNS
-    // await sendNotification(documentId);
   } catch (error: any) {
     console.error("Error processing document:", error);
 
